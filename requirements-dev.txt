@@ -1,0 +1,5 @@
+# Development only. Kept out of requirements.txt so the deployed image does
+# not ship a test framework.
+-r requirements.txt
+
+pytest==8.3.3          # test runner; plain functions and plain asserts
