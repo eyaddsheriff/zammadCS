@@ -25,6 +25,16 @@ class ZammadAPIError(RuntimeError):
         self.status_code = status_code
 
 
+class PublicReplyBlocked(RuntimeError):
+    """A customer-visible write was attempted without being enabled.
+
+    The guard is deliberately in the client rather than in each caller: a
+    public reply reaches a real customer and cannot be recalled, so the
+    ability to send one is opt-in at construction rather than something any
+    call site can decide for itself.
+    """
+
+
 class ZammadClient:
     """Access to a single Zammad instance.
 
@@ -37,9 +47,13 @@ class ZammadClient:
         self,
         config: ZammadConfig,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        allow_public_replies: bool = False,
     ) -> None:
         self._api_root = f"{config.base_url}/api/v1"
         self._timeout = timeout
+        # Defaults to False so the dangerous capability has to be asked for by
+        # name. Internal notes are agent-only and always permitted.
+        self._allow_public_replies = allow_public_replies
 
         # A Session keeps the TCP/TLS connection alive between calls, so the
         # handshake cost is paid once rather than per ticket fetch. It also
@@ -97,6 +111,46 @@ class ZammadClient:
         others work around it.
         """
         return self._get(f"/ticket_articles/by_ticket/{ticket_id}")
+
+    def create_article(
+        self,
+        ticket_id: int,
+        body: str,
+        *,
+        internal: bool,
+        subject: str | None = None,
+        content_type: str = "text/plain",
+    ) -> dict[str, Any]:
+        """Post an article to a ticket.
+
+        `internal` has no default on purpose. It is the difference between a
+        note only agents see and an email a customer receives, and a caller
+        should never make that choice by omission.
+        """
+        if not internal and not self._allow_public_replies:
+            raise PublicReplyBlocked(
+                f"refusing to post a customer-visible article to ticket {ticket_id}: "
+                "construct ZammadClient(allow_public_replies=True) to permit it"
+            )
+
+        payload: dict[str, Any] = {
+            "ticket_id": ticket_id,
+            "body": body,
+            "internal": internal,
+            # "note" rather than "email": a note is recorded on the ticket
+            # without Zammad dispatching anything to the customer.
+            "type": "note",
+            "content_type": content_type,
+        }
+        if subject:
+            payload["subject"] = subject
+
+        response = self._session.post(
+            f"{self._api_root}/ticket_articles", json=payload, timeout=self._timeout
+        )
+        if not response.ok:
+            raise ZammadAPIError(response.status_code, response.text[:200])
+        return response.json()
 
     def close(self) -> None:
         self._session.close()
