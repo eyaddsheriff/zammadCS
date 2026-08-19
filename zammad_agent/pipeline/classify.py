@@ -1,9 +1,10 @@
 """Classify a ticket thread into one of a fixed set of intents."""
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Any
 
-from zammad_agent.llm.client import LLMClient
+from zammad_agent.llm.client import LLMClient, LLMResponseError
 
 # Single source of truth for the taxonomy: the prompt is generated from these
 # keys and the response is validated against them, so a category cannot exist
@@ -33,11 +34,22 @@ class ClassificationError(RuntimeError):
     """The model's reply did not match the required shape."""
 
 
+# Five is enough to separate "unanimous" from "split" while keeping a local
+# CPU model to about a minute per ticket. Odd, so a two-way split cannot tie.
+DEFAULT_SAMPLES = 5
+
+# Non-zero on purpose: identical samples prove nothing about certainty if the
+# decoder was never allowed to vary. This is the sampling spread we measure.
+CONSISTENCY_TEMPERATURE = 0.7
+
+
 @dataclass(frozen=True)
 class Classification:
     intent: str
     confidence: float
     reason: str
+    samples: int = 1
+    votes: dict[str, int] = field(default_factory=dict)
 
 
 def _system_prompt() -> str:
@@ -105,11 +117,70 @@ def validate(payload: dict[str, Any]) -> Classification:
     )
 
 
-def classify_thread(llm: LLMClient, thread: str) -> Classification:
-    """Classify one flattened ticket thread.
+def classify_thread(
+    llm: LLMClient, thread: str, *, temperature: float = 0.0
+) -> Classification:
+    """Classify a flattened thread once.
 
-    Takes the thread text rather than a ticket id so this stays testable
-    against fixtures without a live Zammad instance.
+    The confidence on the result is the model's own self-report, which
+    measured 1.0 on every ticket we tried and therefore carries no
+    information. Use classify_consistent for a confidence worth gating on.
+
+    Takes thread text rather than a ticket id so this stays testable against
+    fixtures without a live Zammad instance.
     """
-    payload = llm.chat_json(build_messages(thread), max_tokens=_MAX_REPLY_TOKENS)
+    payload = llm.chat_json(
+        build_messages(thread), max_tokens=_MAX_REPLY_TOKENS, temperature=temperature
+    )
     return validate(payload)
+
+
+def classify_consistent(
+    llm: LLMClient,
+    thread: str,
+    *,
+    samples: int = DEFAULT_SAMPLES,
+    temperature: float = CONSISTENCY_TEMPERATURE,
+) -> Classification:
+    """Classify a thread repeatedly and derive confidence from agreement.
+
+    A model cannot introspect its own uncertainty; asked for a number it
+    generates the tokens that usually follow such a question, which is why
+    self-reported confidence pins at 1.0. Sampling the same input several
+    times measures uncertainty from outside instead: unanimous answers mean
+    the model is genuinely stable here, a split means it is not.
+
+    Costs `samples` times as many calls. That is the price of a gate that
+    actually gates.
+    """
+    if samples < 1:
+        raise ValueError("samples must be at least 1")
+
+    results: list[Classification] = []
+    for _ in range(samples):
+        try:
+            results.append(classify_thread(llm, thread, temperature=temperature))
+        except (ClassificationError, LLMResponseError):
+            # Swallowed on purpose: a malformed reply is a data point about
+            # instability, counted below via the denominator rather than
+            # retried into a falsely clean result.
+            continue
+
+    if not results:
+        raise ClassificationError(f"no valid classification in {samples} attempts")
+
+    votes = Counter(result.intent for result in results)
+    winner, winning_votes = votes.most_common(1)[0]
+
+    # Denominator is every attempt, not just the parseable ones. Four failures
+    # and one success is a model thrashing on input it cannot handle, and
+    # scoring that 1.0 would recreate the bug this function exists to fix.
+    confidence = winning_votes / samples
+
+    return Classification(
+        intent=winner,
+        confidence=confidence,
+        reason=next(r.reason for r in results if r.intent == winner),
+        samples=samples,
+        votes=dict(votes),
+    )

@@ -14,8 +14,9 @@ import sys
 from zammad_agent.config import ConfigError, load_llm_config, load_zammad_config
 from zammad_agent.llm.client import LLMClient
 from zammad_agent.pipeline.classify import (
+    DEFAULT_SAMPLES,
     THREAD_CHAR_BUDGET,
-    classify_thread,
+    classify_consistent,
 )
 from zammad_agent.pipeline.thread import flatten_thread
 from zammad_agent.zammad.client import ZammadClient
@@ -33,6 +34,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticket", type=int, help="classify this ticket id instead of the first")
     parser.add_argument("--show-text", action="store_true", help="print the flattened thread")
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=DEFAULT_SAMPLES,
+        help=f"classification samples for confidence (default {DEFAULT_SAMPLES}; 1 skips it)",
+    )
     args = parser.parse_args()
 
     try:
@@ -64,10 +71,11 @@ def main() -> int:
             if args.show_text:
                 print(f"\n--- thread {ticket['id']} ---\n{thread}\n--- end ---\n")
 
-            result = classify_thread(llm, thread)
+            result = classify_consistent(llm, thread, samples=args.samples)
             _report(
                 "pipeline: classify",
-                f"intent={result.intent} confidence={result.confidence} ({llm_config.model})",
+                f"intent={result.intent} confidence={result.confidence:.2f} "
+                f"votes={result.votes} ({llm_config.model})",
             )
             if result.reason:
                 print(f"       reason: {result.reason}")
