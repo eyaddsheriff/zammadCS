@@ -85,6 +85,19 @@ class ZammadClient:
         """
         return self._get("/tickets", params={"page": page, "per_page": per_page})
 
+    def get_ticket_articles(self, ticket_id: int) -> list[dict[str, Any]]:
+        """Return every article (message) on one ticket, oldest first.
+
+        This is where the customer's actual words live — the ticket record
+        itself carries only metadata and a message count.
+
+        Deliberately unfiltered. Which articles matter varies by caller:
+        intent classification wants the customer's turns, a summariser wants
+        the whole exchange. Baking one caller's view in here would make the
+        others work around it.
+        """
+        return self._get(f"/ticket_articles/by_ticket/{ticket_id}")
+
     def close(self) -> None:
         self._session.close()
 
