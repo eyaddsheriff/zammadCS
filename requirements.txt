@@ -1,0 +1,5 @@
+# Phase 1 — Zammad read-only client. Pinned exactly so a fresh venv months
+# from now installs what we actually tested against.
+
+requests==2.32.3       # HTTP client for the Zammad REST API
+python-dotenv==1.0.1   # loads .env into the process environment for local dev
