@@ -30,33 +30,71 @@ class ZammadConfig:
         return f"ZammadConfig(base_url={self.base_url!r}, token='***')"
 
 
-def load_zammad_config() -> ZammadConfig:
-    """Read and validate Zammad settings, or raise ConfigError."""
-    base_url = os.getenv("ZAMMAD_URL", "").strip().rstrip("/")
-    token = os.getenv("ZAMMAD_TOKEN", "").strip()
-
-    missing = [
-        name
-        for name, value in (("ZAMMAD_URL", base_url), ("ZAMMAD_TOKEN", token))
-        if not value
-    ]
+def _require(**values: str) -> None:
+    """Raise if any named value is empty."""
+    missing = [name for name, value in values.items() if not value]
     if missing:
         # Fail loudly at startup. Otherwise the first request goes out
         # unauthenticated and we spend the afternoon debugging a 401 that has
-        # nothing to do with the token being wrong.
+        # nothing to do with the credential being wrong.
         raise ConfigError(
             f"Missing environment variable(s): {', '.join(missing)}. "
             "Copy .env.example to .env and fill them in."
         )
 
-    parsed = urlparse(base_url)
+
+def _check_credentialed_url(var_name: str, url: str) -> None:
+    """Reject URLs unsafe to send a credential to."""
+    parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ConfigError(f"ZAMMAD_URL needs an http:// or https:// scheme (got {base_url!r})")
+        raise ConfigError(f"{var_name} needs an http:// or https:// scheme (got {url!r})")
 
-    # The token rides on every request, so plain http would leak it to anything
-    # on the network path. Local development against a container on loopback is
-    # the one case where there is no network path to leak to.
+    # The credential rides on every request, so plain http would expose it to
+    # anything on the network path. Loopback is the one case where there is no
+    # network path to leak to — which is what makes local Ollama legal here.
     if parsed.scheme == "http" and parsed.hostname not in _LOCAL_HOSTS:
-        raise ConfigError(f"Refusing to send the API token over plain http to {parsed.hostname!r}")
+        raise ConfigError(f"Refusing to send a credential over plain http to {parsed.hostname!r}")
 
+
+def load_zammad_config() -> ZammadConfig:
+    """Read and validate Zammad settings, or raise ConfigError."""
+    base_url = os.getenv("ZAMMAD_URL", "").strip().rstrip("/")
+    token = os.getenv("ZAMMAD_TOKEN", "").strip()
+
+    _require(ZAMMAD_URL=base_url, ZAMMAD_TOKEN=token)
+    _check_credentialed_url("ZAMMAD_URL", base_url)
     return ZammadConfig(base_url=base_url, token=token)
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    """Points at any OpenAI-compatible chat completions API.
+
+    Ollama and DeepSeek both speak that shape, so switching providers is a
+    change to these three values rather than a change to any code.
+    """
+
+    base_url: str
+    api_key: str
+    model: str
+
+    def __repr__(self) -> str:
+        return (
+            f"LLMConfig(base_url={self.base_url!r}, "
+            f"model={self.model!r}, api_key='***')"
+        )
+
+
+def load_llm_config() -> LLMConfig:
+    """Read and validate LLM provider settings, or raise ConfigError."""
+    base_url = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")
+    api_key = os.getenv("LLM_API_KEY", "").strip()
+    model = os.getenv("LLM_MODEL", "").strip()
+
+    # Ollama ignores the key but the OpenAI protocol requires the header, so
+    # locally this is the literal string "ollama". Still required rather than
+    # defaulted: once the base URL points at DeepSeek, a silently-defaulted key
+    # would surface as a confusing 401 instead of a missing-config error.
+    _require(LLM_BASE_URL=base_url, LLM_API_KEY=api_key, LLM_MODEL=model)
+    _check_credentialed_url("LLM_BASE_URL", base_url)
+    return LLMConfig(base_url=base_url, api_key=api_key, model=model)
