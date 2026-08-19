@@ -7,6 +7,10 @@
 # public. Rebuildable from the source documents, so nothing is lost.
 .chroma/
 
+# Real knowledge-base documents are internal company material and this repo
+# is public. Committed examples live in examples/sample_kb instead.
+knowledge_base/
+
 # Python
 __pycache__/
 *.py[cod]
