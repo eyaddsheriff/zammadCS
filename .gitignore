@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Vector index. Contains knowledge-base content verbatim, and this repo is
+# public. Rebuildable from the source documents, so nothing is lost.
+.chroma/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -3,3 +3,4 @@
 
 requests==2.32.3       # HTTP client for the Zammad REST API
 python-dotenv==1.0.1   # loads .env into the process environment for local dev
+chromadb==1.5.9        # embedded vector index; no server to run, unlike Qdrant

@@ -85,6 +85,38 @@ class LLMConfig:
         )
 
 
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """Points at an OpenAI-compatible embeddings API.
+
+    Deliberately separate from LLMConfig rather than derived from it. Chat
+    moves to DeepSeek eventually; embeddings cannot follow, because DeepSeek
+    offers no embeddings endpoint. Inheriting the base URL would turn that
+    switch into a 404 raised far from its cause.
+    """
+
+    base_url: str
+    api_key: str
+    model: str
+
+    def __repr__(self) -> str:
+        return (
+            f"EmbeddingConfig(base_url={self.base_url!r}, "
+            f"model={self.model!r}, api_key='***')"
+        )
+
+
+def load_embedding_config() -> EmbeddingConfig:
+    """Read and validate embedding provider settings, or raise ConfigError."""
+    base_url = os.getenv("EMBED_BASE_URL", "").strip().rstrip("/")
+    api_key = os.getenv("EMBED_API_KEY", "").strip()
+    model = os.getenv("EMBED_MODEL", "").strip()
+
+    _require(EMBED_BASE_URL=base_url, EMBED_API_KEY=api_key, EMBED_MODEL=model)
+    _check_credentialed_url("EMBED_BASE_URL", base_url)
+    return EmbeddingConfig(base_url=base_url, api_key=api_key, model=model)
+
+
 def load_llm_config() -> LLMConfig:
     """Read and validate LLM provider settings, or raise ConfigError."""
     base_url = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")
